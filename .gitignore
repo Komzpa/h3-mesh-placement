@@ -1,0 +1,9 @@
+# Generated data and mirrors
+/data/mid/
+/data/out/
+/data/in/population/kontur_population_20231101.gpkg.gz
+/data/in/population/kontur_population_20231101.gpkg
+/data/in/gebco/gebco_2024_geotiff.zip
+/data/mid/gebco/
+# Build markers and logs
+/db/

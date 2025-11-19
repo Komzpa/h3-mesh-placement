@@ -1,0 +1,33 @@
+{
+  "attributes": {
+    "type": true,
+    "id": true,
+    "version": true,
+    "changeset": false,
+    "timestamp": true,
+    "uid": false,
+    "user": true,
+    "way_nodes": true
+  },
+  "linear_tags": [
+    "highway",
+    "barrier",
+    "natural=coastline"
+  ],
+  "area_tags": [
+    "aeroway",
+    "amenity",
+    "building",
+    "building:part",
+    "landuse",
+    "leisure",
+    "man_made",
+    "natural!=coastline",
+    "waterway=riverbank"
+  ],
+  "exclude_tags": [
+    "created_by",
+    "source"
+  ],
+  "include_tags": []
+}

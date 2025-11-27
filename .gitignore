@@ -1,8 +1,21 @@
 # Generated data and mirrors
+/data/in/osm/
+/data/in/gebco/
+/data/in/population/*.gpkg
+/data/in/population/*.gpkg.gz
+/data/in/population/*.gpkg.zip
 /data/mid/
-/data/in/population/kontur_population_20231101.gpkg.gz
-/data/in/population/kontur_population_20231101.gpkg
-/data/in/gebco/gebco_2024_geotiff.zip
-/data/mid/gebco/
-# Build markers and logs
+/data/out/
+
+# Build markers, logs and run reports
 /db/
+/logs/
+/report.json
+
+# Tooling artifacts
+/make_profile.db
+/make.svg
+
+# Local GIS projects and recordings
+*.qgz
+*.mp4

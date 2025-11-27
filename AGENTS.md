@@ -102,6 +102,8 @@ you can't just create ordered table and then rely on it to be ordered on scan wi
 
 
 profile_make_lint comes from `sudo pip3 install https://github.com/maumaps/make-profiler/archive/master.zip --break-system-packages` and helps check hierarchy of the Makefile.
-don't run one SQL file from other SQL file - this quickly becomes a mess with relative file paths.
+don't run one SQL file from other SQL file - this quickly becomes a mess with relative file paths. \ir is forbidden.
 psql can’t connect to /var/run/postgresql/.s.PGSQL.5432 -> rerun with elevated permissions/user confirmation
 When make step depends on a directory, mark that dependency as order only (after |)
+Add explainer comments before every query and CTE, why is it here, how it is performed, what uses this data later.
+If a thing is ever called once, don't create procedures for it ever

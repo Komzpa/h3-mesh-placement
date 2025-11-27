@@ -9,6 +9,7 @@ create table mesh_visibility_edges (
     target_h3 h3index not null,
     distance_m double precision not null,
     is_visible boolean not null,
+    is_between_clusters boolean not null default false,
     geom geometry not null
 );
 

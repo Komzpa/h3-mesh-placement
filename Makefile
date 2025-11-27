@@ -1,6 +1,6 @@
 all: db/procedure/mesh_run_greedy ## [FINAL] Build entire pipeline end-to-end
 
-test: db/test/georgia_roads_geom db/test/population_h3_r8 db/test/h3_los_between_cells db/test/mesh_surface_visible_towers db/test/mesh_surface_refresh_reception_metrics db/test/mesh_surface_refresh_visible_tower_counts db/test/mesh_visibility_edges ## [FINAL] Run verification suite
+test: db/test/georgia_roads_geom db/test/population_h3_r8 db/test/h3_los_between_cells db/test/mesh_surface_visible_towers db/test/mesh_surface_refresh_reception_metrics db/test/mesh_surface_refresh_visible_tower_counts db/test/mesh_visibility_edges db/test/mesh_visibility_invisible_route_geom db/test/mesh_run_greedy_prepare db/test/mesh_route_cache_graph_priority db/test/mesh_route ## [FINAL] Run verification suite
 
 clean: ## [FINAL] Remove intermediate data and build markers
 	@if [ -n "$(filter clean,$(MAKECMDGOALS))" ]; then rm -rf data/mid data/out db; fi
@@ -71,6 +71,7 @@ db/table/postgis_extension: | db/table ## Ensure required Postgres extensions ex
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -c "create extension if not exists postgis;"
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -c "create extension if not exists h3;"
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -c "create extension if not exists hstore;"
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -c "create extension if not exists pgrouting;"
 	touch db/table/postgis_extension
 
 db/table/mesh_pipeline_settings: tables/mesh_pipeline_settings.sql db/table/postgis_extension | db/table ## Store pipeline constants
@@ -167,6 +168,10 @@ db/function/mesh_surface_refresh_visible_tower_counts: functions/mesh_surface_re
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f functions/mesh_surface_refresh_visible_tower_counts.sql
 	touch db/function/mesh_surface_refresh_visible_tower_counts
 
+db/function/mesh_visibility_invisible_route_geom: functions/mesh_visibility_invisible_route_geom.sql db/table/mesh_surface_h3_r8 db/table/mesh_route_graph db/table/mesh_route_graph_cache | db/function ## Build routing helper for invisible visibility edges
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f functions/mesh_visibility_invisible_route_geom.sql
+	touch db/function/mesh_visibility_invisible_route_geom
+
 db/test/georgia_roads_geom: tests/georgia_roads_geom.sql db/table/georgia_roads_geom | db/test ## Verify only car-capable highways stay in roads layer
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tests/georgia_roads_geom.sql
 	touch db/test/georgia_roads_geom
@@ -195,7 +200,15 @@ db/table/mesh_surface_h3_r8: tables/mesh_surface_h3_r8.sql db/table/mesh_surface
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tables/mesh_surface_h3_r8.sql
 	touch db/table/mesh_surface_h3_r8
 
-db/table/mesh_visibility_edges: tables/mesh_visibility_edges.sql scripts/mesh_visibility_edges_refresh.sql db/table/mesh_towers db/table/mesh_surface_h3_r8 db/function/h3_los_between_cells | db/table ## Materialize visibility diagnostics for seed and active towers
+db/table/mesh_route_graph_cache: tables/mesh_route_graph_cache.sql | db/table ## Cache precomputed routing geometries per tower pair
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tables/mesh_route_graph_cache.sql
+	touch db/table/mesh_route_graph_cache
+
+db/table/mesh_route_graph: tables/mesh_route_graph.sql db/table/mesh_surface_h3_r8 db/table/mesh_route_graph_cache | db/table ## Precompute routing graph for invisible edge fallback
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tables/mesh_route_graph.sql
+	touch db/table/mesh_route_graph
+
+db/table/mesh_visibility_edges: tables/mesh_visibility_edges.sql scripts/mesh_visibility_edges_refresh.sql db/table/mesh_towers db/table/mesh_surface_h3_r8 db/table/mesh_route_graph db/table/mesh_route_graph_cache db/function/h3_los_between_cells db/function/mesh_visibility_invisible_route_geom | db/table ## Materialize visibility diagnostics for seed and active towers
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tables/mesh_visibility_edges.sql
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f scripts/mesh_visibility_edges_refresh.sql
 	touch db/table/mesh_visibility_edges
@@ -204,8 +217,43 @@ db/test/mesh_visibility_edges: tests/mesh_visibility_edges.sql db/table/mesh_vis
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tests/mesh_visibility_edges.sql
 	touch db/test/mesh_visibility_edges
 
-db/procedure/mesh_run_greedy: procedures/mesh_run_greedy_prepare.sql procedures/mesh_run_greedy.sql procedures/mesh_run_greedy_finalize.sql scripts/mesh_visibility_edges_refresh.sql db/table/mesh_visibility_edges db/table/mesh_surface_h3_r8 db/table/mesh_greedy_iterations db/function/mesh_surface_refresh_reception_metrics db/function/mesh_surface_refresh_visible_tower_counts db/function/mesh_surface_fill_visible_population db/table/mesh_initial_nodes_h3_r8 | db/procedure ## Execute greedy placement loop
+db/test/mesh_visibility_invisible_route_geom: tests/mesh_visibility_invisible_route_geom.sql db/function/mesh_visibility_invisible_route_geom db/table/mesh_surface_h3_r8 db/table/mesh_route_graph db/table/mesh_route_graph_cache | db/test ## Ensure invisible visibility edges gain routed geometries
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tests/mesh_visibility_invisible_route_geom.sql
+	touch db/test/mesh_visibility_invisible_route_geom
+
+db/test/mesh_run_greedy_prepare: tests/mesh_run_greedy_prepare.sql procedures/mesh_run_greedy_prepare.sql db/table/mesh_surface_h3_r8 db/table/mesh_towers db/table/mesh_greedy_iterations | db/test ## Ensure greedy preparation preserves routed towers
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_run_greedy_prepare.sql
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tests/mesh_run_greedy_prepare.sql
+	touch db/test/mesh_run_greedy_prepare
+
+db/test/mesh_route_cache_graph_priority: tests/mesh_route_cache_graph_priority.sql db/table/mesh_surface_h3_r8 db/table/mesh_towers db/table/mesh_los_cache db/table/mesh_visibility_edges | db/test ## Validate LOS cache prioritizes nearest invisible edges
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tests/mesh_route_cache_graph_priority.sql
+	touch db/test/mesh_route_cache_graph_priority
+
+db/test/mesh_route: tests/mesh_route.sql procedures/mesh_route_cache_graph.sql procedures/mesh_route_bridge.sql db/table/mesh_surface_h3_r8 db/table/mesh_towers db/table/mesh_los_cache | db/test ## Validate mesh_route cache/bridge stages
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_route_cache_graph.sql
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_route_bridge.sql
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tests/mesh_route.sql
+	touch db/test/mesh_route
+
+db/procedure/mesh_route_cache_graph: procedures/mesh_route_cache_graph.sql db/table/mesh_surface_h3_r8 db/table/mesh_towers db/table/mesh_los_cache db/table/mesh_visibility_edges | db/procedure ## Cache LOS metrics and build routing graph
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_route_cache_graph.sql
+	touch db/procedure/mesh_route_cache_graph
+
+db/procedure/mesh_route_bridge: procedures/mesh_route_bridge.sql db/procedure/mesh_route_cache_graph db/function/mesh_surface_refresh_reception_metrics db/function/mesh_surface_refresh_visible_tower_counts | db/procedure ## Bridge farthest tower clusters via pgRouting
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_route_bridge.sql
+	touch db/procedure/mesh_route_bridge
+
+db/procedure/mesh_route_refresh_visibility: scripts/mesh_visibility_edges_refresh.sql db/table/mesh_visibility_edges db/procedure/mesh_route_bridge | db/procedure ## Rebuild visibility diagnostics after routing bridges
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f scripts/mesh_visibility_edges_refresh.sql
+	touch db/procedure/mesh_route_refresh_visibility
+
+db/procedure/mesh_route: db/procedure/mesh_route_refresh_visibility | db/procedure ## Build PG routing bridges between tower clusters
+	touch db/procedure/mesh_route
+
+db/procedure/mesh_run_greedy: procedures/mesh_run_greedy_prepare.sql procedures/mesh_run_greedy.sql procedures/mesh_run_greedy_finalize.sql scripts/mesh_visibility_edges_refresh.sql db/procedure/mesh_route db/table/mesh_visibility_edges db/table/mesh_surface_h3_r8 db/table/mesh_greedy_iterations db/function/mesh_surface_refresh_reception_metrics db/function/mesh_surface_refresh_visible_tower_counts db/function/mesh_surface_fill_visible_population db/table/mesh_initial_nodes_h3_r8 | db/procedure ## Execute greedy placement loop
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_run_greedy_prepare.sql
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -c "call mesh_run_greedy_prepare();"
 	bash -lc 'set -euo pipefail; for iter in $$(seq 1 100); do echo ">> Greedy iteration $$iter"; psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_run_greedy.sql; psql --no-psqlrc --set=ON_ERROR_STOP=1 -f scripts/mesh_visibility_edges_refresh.sql; done'
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_run_greedy_finalize.sql
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f scripts/mesh_visibility_edges_refresh.sql

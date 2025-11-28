@@ -1,6 +1,6 @@
 all: db/procedure/mesh_run_greedy ## [FINAL] Build entire pipeline end-to-end
 
-test: db/test/georgia_roads_geom db/test/population_h3_r8 db/test/h3_los_between_cells db/test/mesh_surface_visible_towers db/test/mesh_surface_refresh_reception_metrics db/test/mesh_surface_refresh_visible_tower_counts db/test/mesh_visibility_edges db/test/mesh_visibility_invisible_route_geom db/test/mesh_run_greedy_prepare db/test/mesh_route_cache_graph_priority db/test/mesh_route ## [FINAL] Run verification suite
+test: db/test/georgia_roads_geom db/test/population_h3_r8 db/test/h3_los_between_cells db/test/mesh_surface_visible_towers db/test/mesh_surface_refresh_reception_metrics db/test/mesh_surface_refresh_visible_tower_counts db/test/mesh_visibility_edges db/test/mesh_visibility_invisible_route_geom db/test/mesh_run_greedy_prepare db/test/mesh_route_cache_graph_priority db/test/mesh_route_corridor_between_towers db/test/mesh_route ## [FINAL] Run verification suite
 
 clean: ## [FINAL] Remove intermediate data and build markers
 	@if [ -n "$(filter clean,$(MAKECMDGOALS))" ]; then rm -rf data/mid data/out db; fi
@@ -172,6 +172,10 @@ db/function/mesh_visibility_invisible_route_geom: functions/mesh_visibility_invi
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f functions/mesh_visibility_invisible_route_geom.sql
 	touch db/function/mesh_visibility_invisible_route_geom
 
+db/function/mesh_route_corridor_between_towers: functions/mesh_route_corridor_between_towers.sql db/procedure/mesh_route_cache_graph | db/function ## Produce pgRouting corridors between specific tower pairs
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f functions/mesh_route_corridor_between_towers.sql
+	touch db/function/mesh_route_corridor_between_towers
+
 db/test/georgia_roads_geom: tests/georgia_roads_geom.sql db/table/georgia_roads_geom | db/test ## Verify only car-capable highways stay in roads layer
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tests/georgia_roads_geom.sql
 	touch db/test/georgia_roads_geom
@@ -208,7 +212,7 @@ db/table/mesh_route_graph: tables/mesh_route_graph.sql db/table/mesh_surface_h3_
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tables/mesh_route_graph.sql
 	touch db/table/mesh_route_graph
 
-db/table/mesh_visibility_edges: tables/mesh_visibility_edges.sql scripts/mesh_visibility_edges_refresh.sql db/table/mesh_towers db/table/mesh_surface_h3_r8 db/table/mesh_route_graph db/table/mesh_route_graph_cache db/function/h3_los_between_cells db/function/mesh_visibility_invisible_route_geom | db/table ## Materialize visibility diagnostics for seed and active towers
+db/table/mesh_visibility_edges: tables/mesh_visibility_edges.sql scripts/mesh_visibility_edges_refresh.sql db/table/mesh_towers db/table/mesh_surface_h3_r8 db/table/mesh_route_graph db/table/mesh_route_graph_cache db/function/h3_los_between_cells db/function/mesh_visibility_invisible_route_geom db/procedure/mesh_visibility_edges_refresh | db/table ## Materialize visibility diagnostics for seed and active towers
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tables/mesh_visibility_edges.sql
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f scripts/mesh_visibility_edges_refresh.sql
 	touch db/table/mesh_visibility_edges
@@ -230,6 +234,11 @@ db/test/mesh_route_cache_graph_priority: tests/mesh_route_cache_graph_priority.s
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tests/mesh_route_cache_graph_priority.sql
 	touch db/test/mesh_route_cache_graph_priority
 
+db/test/mesh_route_corridor_between_towers: tests/mesh_route_corridor_between_towers.sql db/function/mesh_route_corridor_between_towers | db/test ## Validate corridor extraction between tower pairs
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f tests/mesh_route_corridor_between_towers.sql
+	touch db/test/mesh_route_corridor_between_towers
+
+
 db/test/mesh_route: tests/mesh_route.sql procedures/mesh_route_cache_graph.sql procedures/mesh_route_bridge.sql db/table/mesh_surface_h3_r8 db/table/mesh_towers db/table/mesh_los_cache | db/test ## Validate mesh_route cache/bridge stages
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_route_cache_graph.sql
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_route_bridge.sql
@@ -244,7 +253,16 @@ db/procedure/mesh_route_bridge: procedures/mesh_route_bridge.sql db/procedure/me
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_route_bridge.sql
 	touch db/procedure/mesh_route_bridge
 
-db/procedure/mesh_route_refresh_visibility: scripts/mesh_visibility_edges_refresh.sql db/table/mesh_visibility_edges db/procedure/mesh_route_bridge | db/procedure ## Rebuild visibility diagnostics after routing bridges
+db/procedure/mesh_visibility_edges_refresh: procedures/mesh_visibility_edges_refresh.sql db/table/mesh_towers db/table/mesh_surface_h3_r8 db/table/gebco_elevation_h3_r8 db/function/h3_los_between_cells db/function/mesh_visibility_invisible_route_geom | db/procedure ## Install visibility refresh procedure
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_visibility_edges_refresh.sql
+	touch db/procedure/mesh_visibility_edges_refresh
+
+db/procedure/mesh_route_cluster_slim: procedures/mesh_route_cluster_slim.sql scripts/mesh_route_cluster_slim.sql db/procedure/mesh_route_bridge db/procedure/mesh_route_cache_graph db/function/mesh_route_corridor_between_towers db/function/mesh_surface_refresh_reception_metrics db/function/mesh_surface_refresh_visible_tower_counts db/procedure/mesh_visibility_edges_refresh | db/procedure ## Shorten long intra-cluster hops with routing towers
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f procedures/mesh_route_cluster_slim.sql
+	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f scripts/mesh_route_cluster_slim.sql
+	touch db/procedure/mesh_route_cluster_slim
+
+db/procedure/mesh_route_refresh_visibility: scripts/mesh_visibility_edges_refresh.sql db/table/mesh_visibility_edges db/procedure/mesh_route_cluster_slim db/procedure/mesh_visibility_edges_refresh | db/procedure ## Rebuild visibility diagnostics after routing stages
 	psql --no-psqlrc --set=ON_ERROR_STOP=1 -f scripts/mesh_visibility_edges_refresh.sql
 	touch db/procedure/mesh_route_refresh_visibility
 

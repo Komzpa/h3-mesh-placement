@@ -109,6 +109,7 @@ insert into mesh_visibility_edges (
     distance_m,
     is_visible,
     is_between_clusters,
+    cluster_hops,
     geom
 )
 select
@@ -119,6 +120,7 @@ select
     ST_Distance(close_start::geography, close_end::geography),
     false,
     true,
+    null,
     ST_MakeLine(close_start, close_end)
 from tower_pair tp,
      lateral (
@@ -135,6 +137,7 @@ select
     ST_Distance(far_start::geography, far_end::geography),
     false,
     true,
+    null,
     ST_MakeLine(far_start, far_end)
 from tower_pair tp,
      lateral (

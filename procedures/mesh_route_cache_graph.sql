@@ -34,7 +34,7 @@ select
             select ST_Distance(c.centroid_geog, e.geom::geography)
             from mesh_visibility_edges e
             where not e.is_visible
-              and e.is_between_clusters
+              and (e.is_between_clusters or cluster_hops > 7)
             order by c.centroid_geog::geometry <-> e.geom
             limit 1
         ),
@@ -121,7 +121,7 @@ with prioritized_pairs as (
         mp.priority
     from mesh_route_missing_pairs mp
     order by mp.priority, mp.src_h3, mp.dst_h3
-    limit 20000000
+    limit 1000000
 )
 select
     mp.src_h3,

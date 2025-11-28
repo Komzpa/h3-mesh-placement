@@ -11,16 +11,21 @@ create or replace function mesh_route_intermediate_hexes(
     )
     returns table (seq integer, h3 h3index)
     language plpgsql
-    stable
+    volatile
 as
 $$
 declare
     start_vids integer[];
     end_vids integer[];
+    separation constant double precision := 5000;
+    start_h3s h3index[];
+    end_h3s h3index[];
 begin
     -- Gather node ids for the source cluster from the cached routing graph.
-    select array_agg(mrn.node_id)
-    into start_vids
+    select
+        array_agg(mrn.node_id),
+        array_agg(mrn.h3)
+    into start_vids, start_h3s
     from mesh_route_nodes mrn
     join mesh_towers mt on mt.h3 = mrn.h3
     join mesh_tower_clusters() tc on tc.tower_id = mt.tower_id
@@ -31,8 +36,10 @@ begin
     end if;
 
     -- Gather node ids for the destination cluster.
-    select array_agg(mrn.node_id)
-    into end_vids
+    select
+        array_agg(mrn.node_id),
+        array_agg(mrn.h3)
+    into end_vids, end_h3s
     from mesh_route_nodes mrn
     join mesh_towers mt on mt.h3 = mrn.h3
     join mesh_tower_clusters() tc on tc.tower_id = mt.tower_id
@@ -42,6 +49,29 @@ begin
         return;
     end if;
 
+    if to_regclass('pg_temp.mesh_route_cluster_blocked_nodes') is null then
+        create temporary table mesh_route_cluster_blocked_nodes (
+            node_id integer primary key
+        ) on commit drop;
+    else
+        truncate mesh_route_cluster_blocked_nodes;
+    end if;
+
+    insert into mesh_route_cluster_blocked_nodes (node_id)
+    select mrn.node_id
+    from mesh_route_nodes mrn
+    join mesh_surface_h3_r8 surface on surface.h3 = mrn.h3
+    where (start_vids is null or mrn.node_id <> all(start_vids))
+      and (end_vids is null or mrn.node_id <> all(end_vids))
+      and surface.centroid_geog is not null
+      and exists (
+            select 1
+            from mesh_towers mt
+            where (start_h3s is null or mt.h3 <> all(start_h3s))
+              and (end_h3s is null or mt.h3 <> all(end_h3s))
+              and ST_DWithin(surface.centroid_geog, mt.centroid_geog, separation)
+        );
+
     -- Use pgRouting to find the minimum path-loss corridor, then keep only cells that do not already host towers.
     return query
     with raw_paths as (
@@ -49,7 +79,14 @@ begin
             pdr.*,
             sum(case when pdr.path_seq = 1 then 1 else 0 end) over (order by pdr.seq) as path_id
         from pgr_dijkstra(
-            'select edge_id as id, source, target, cost, reverse_cost from mesh_route_edges',
+            'select edge_id as id,
+                    source,
+                    target,
+                    cost,
+                    reverse_cost
+             from mesh_route_edges
+             where source not in (select node_id from mesh_route_cluster_blocked_nodes)
+               and target not in (select node_id from mesh_route_cluster_blocked_nodes)',
             start_vids,
             end_vids,
             false
@@ -157,10 +194,9 @@ begin
             join mesh_towers mt on mt.tower_id = tc.tower_id
         ),
         cluster_centroids as (
-            -- Approximate each cluster with a centroid for distance comparisons.
             select
                 cluster_id,
-                ST_Centroid(ST_Collect(centroid_geog::geometry))::public.geography as centroid_geog
+                ST_Collect(centroid_geog::geometry)::public.geography as centroid_geog
             from cluster_points
             group by cluster_id
         ),
@@ -183,7 +219,7 @@ begin
         select cluster_a, cluster_b, cluster_distance
         into start_cluster, end_cluster, pair_distance
         from cluster_pairs
-        order by cluster_distance desc
+        order by cluster_distance asc
         limit 1;
 
         exit when start_cluster is null or end_cluster is null;

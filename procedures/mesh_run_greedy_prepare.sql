@@ -9,9 +9,9 @@ $$
 begin
     raise notice 'Resetting greedy artifacts';
 
-    -- Leave 'seed' and 'route' towers intact so mesh_route_bridge progress survives greedy reruns.
+    -- Remove only towers installed by the greedy loop itself so upstream stages (route/cluster slim) stay intact.
     delete from mesh_towers
-    where source not in ('seed', 'route');
+    where source in ('greedy', 'bridge');
 
     truncate mesh_greedy_iterations;
 

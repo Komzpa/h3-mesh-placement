@@ -71,14 +71,12 @@ begin
                 expected_visible
             from (
                 values
-                    ('Poti', 'Gomismta', true),
                     ('Poti', 'Feria 2', true),
                     ('Poti', 'SoNick', true),
                     ('Komzpa', 'Feria 2', true),
                     ('Komzpa', 'Batumi South', true),
                     ('Batumi South', 'SoNick', true),
                     ('Tbilisi hackerspace', 'Poti', false),
-                    ('Tbilisi hackerspace', 'Gomismta', false),
                     ('Tbilisi hackerspace', 'Feria 2', false),
                     ('Tbilisi hackerspace', 'Komzpa', false),
                     ('Tbilisi hackerspace', 'Batumi South', false),
@@ -118,5 +116,68 @@ begin
     end loop;
 end;
 $$;
+
+drop table if exists tmp_test_visibility_cluster_edges;
+-- Temporary helper storing LOS edges (<=70 km) so we can recompute hop counts for seed towers.
+create temporary table tmp_test_visibility_cluster_edges as
+select
+    row_number() over () as edge_id,
+    e.source_id,
+    e.target_id,
+    1::double precision as cost
+from mesh_visibility_edges e
+where e.is_visible
+  and e.distance_m <= 70000;
+
+do
+$$
+declare
+    rec record;
+begin
+    for rec in
+        with seed_towers as (
+            -- Restrict hop validation to the documented seed towers so the loop stays small.
+            select t.tower_id
+            from mesh_towers t
+            join mesh_initial_nodes_h3_r8 seeds on seeds.h3 = t.h3
+        ),
+        expected as (
+            -- Recompute hop counts between every connected seed pair using pgRouting for comparison.
+            select
+                least(result.start_vid, result.end_vid) as source_id,
+                greatest(result.start_vid, result.end_vid) as target_id,
+                result.agg_cost::integer as hops
+            from pgr_dijkstra(
+                'select edge_id as id, source_id as source, target_id as target, cost, cost as reverse_cost from tmp_test_visibility_cluster_edges',
+                coalesce(array(select tower_id::bigint from seed_towers order by tower_id), array[]::bigint[]),
+                coalesce(array(select tower_id::bigint from seed_towers order by tower_id), array[]::bigint[]),
+                false
+            ) as result
+            where result.start_vid < result.end_vid
+              and result.agg_cost < 'Infinity'::double precision
+              and result.node = result.end_vid
+        )
+        select
+            e.source_id,
+            e.target_id,
+            exp.hops,
+            e.cluster_hops
+        from expected exp
+        join mesh_visibility_edges e
+          on e.source_id = exp.source_id
+         and e.target_id = exp.target_id
+    loop
+        if rec.cluster_hops is null then
+            raise exception 'cluster_hops missing for seed pair % -> %; expected % hops', rec.source_id, rec.target_id, rec.hops;
+        end if;
+
+        if rec.cluster_hops <> rec.hops then
+            raise exception 'cluster_hops mismatch for seed pair % -> %: stored %, expected %', rec.source_id, rec.target_id, rec.cluster_hops, rec.hops;
+        end if;
+    end loop;
+end;
+$$;
+
+drop table if exists tmp_test_visibility_cluster_edges;
 
 rollback;

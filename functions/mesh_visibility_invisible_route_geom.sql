@@ -19,6 +19,7 @@ declare
     canonical_source h3index;
     canonical_target h3index;
     stored_geom geometry;
+    separation constant double precision := 5000;
 begin
     -- Normalize the pair ordering so cache lookups stay consistent regardless of call direction.
     if source_h3::text <= target_h3::text then
@@ -51,11 +52,37 @@ begin
         return null;
     end if;
 
+    if to_regclass('pg_temp.mesh_route_graph_blocked_nodes') is null then
+        create temporary table mesh_route_graph_blocked_nodes (
+            node_id integer primary key
+        ) on commit drop;
+    else
+        truncate mesh_route_graph_blocked_nodes;
+    end if;
+
+    insert into mesh_route_graph_blocked_nodes (node_id)
+    select mrgn.node_id
+    from mesh_route_graph_nodes mrgn
+    where mrgn.node_id not in (start_node, end_node)
+      and exists (
+            select 1
+            from mesh_towers mt
+            where mt.h3 not in (canonical_source, canonical_target)
+              and ST_DWithin(mrgn.geog, mt.centroid_geog, separation)
+        );
+
     with path_vertices as (
         -- Run pgRouting across the global routing graph to recover the minimum-cost corridor.
         select *
         from pgr_dijkstra(
-            'select edge_id as id, source_node_id as source, target_node_id as target, cost, cost as reverse_cost from mesh_route_graph_edges',
+            'select edge_id as id,
+                    source_node_id as source,
+                    target_node_id as target,
+                    cost,
+                    cost as reverse_cost
+             from mesh_route_graph_edges
+             where source_node_id not in (select node_id from mesh_route_graph_blocked_nodes)
+               and target_node_id not in (select node_id from mesh_route_graph_blocked_nodes)',
             start_node,
             end_node,
             true
